@@ -30,7 +30,8 @@ button:disabled{background:#8593ad}
          inputmode="text" placeholder="••••••••••">
   <button id="go">Open my outlets</button>
   <div class="msg" id="msg"></div>
-  <div class="f">On iPhone, open this page in Safari and use Share → Add to Home Screen. Opening an
+  <div class="f"><a href="#" id="chk" style="color:#2E4E86;font-weight:700">Run a setup check</a>
+  <span id="chkr"></span><br>On iPhone, open this page in Safari and use Share → Add to Home Screen. Opening an
   attachment from WhatsApp or email will show a blank page. Anything you type inside the tool stays
   on your own phone.</div>
 </div>
@@ -45,8 +46,11 @@ async function open_(){
   try{
     // the file name is derived from the password, so a wrong one simply finds nothing
     const id=hex(await crypto.subtle.digest('SHA-256',enc.encode(pw+'|'+PEPPER))).slice(0,24);
-    const r=await fetch('data/'+id+'.enc',{cache:'no-store'});
-    if(!r.ok)throw new Error('nomatch');
+    let r=null;
+    for(const path of ['data/'+id+'.enc', id+'.enc']){        // data folder, or flat at the root
+      try{const t=await fetch(path,{cache:'no-store'}); if(t.ok){r=t;break;}}catch(err){}
+    }
+    if(!r)throw new Error('nomatch');
     const buf=new Uint8Array(await r.arrayBuffer());
     if(String.fromCharCode(...buf.slice(0,4))!=='FCV1')throw new Error('format');
     msg('Unlocking…');
@@ -55,16 +59,48 @@ async function open_(){
     const key=await crypto.subtle.deriveKey(
       {name:'PBKDF2',salt:salt,iterations:ITERS,hash:'SHA-256'},base,
       {name:'AES-GCM',length:256},false,['decrypt']);
-    const html=new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},key,ct));
+    let plain;
+    try{plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},key,ct);}
+    catch(err){throw new Error('badkey');}
+    const html=new TextDecoder().decode(plain);
     msg('Opening…','ok');
     // same URL, same origin — so what the tool saves on this phone survives a refresh
     document.open();document.write(html);document.close();
   }catch(e){
     b.disabled=false;
-    msg(e&&e.message==='nomatch'?'That password does not match. Check for typos — letters only, no spaces.'
-      :'Could not open. Check your connection and try again.','err');
+    const m=e&&e.message;
+    if(location.protocol==='file:')
+      msg('This page has to be opened from its web link, not from a file on the phone. A file '+
+          'opened directly cannot load its data.','err');
+    else if(m==='nomatch')
+      msg('Not recognised. Either the password has a typo, or the site is still deploying — '+
+          'wait a minute and try again. If it keeps failing, the data folder may not have '+
+          'finished uploading.','err');
+    else if(m==='format')
+      msg('The data file on the server looks wrong. It was probably uploaded as text — re-upload '+
+          'the data folder.','err');
+    else if(m==='badkey')
+      msg('Password recognised but the data could not be opened. The site was rebuilt with new '+
+          'passwords — ask for the current one.','err');
+    else msg('Could not open — check the connection and try again. ('+(m||'error')+')','err');
   }
 }
+// tells the person deploying whether the site itself is wired up, without needing a password
+document.getElementById('chk').onclick=async e=>{
+  e.preventDefault();
+  const out=document.getElementById('chkr');
+  const bits=[];
+  bits.push(location.protocol==='file:'?'opened as a local file — must use the web link'
+            :'served over '+location.protocol.replace(':',''));
+  bits.push(crypto&&crypto.subtle?'crypto available':'CRYPTO MISSING — needs https');
+  for(const [lbl,path] of [['data/ folder','data/probe-not-real.enc'],
+                          ['site root','probe-not-real.enc']]){
+    try{const t=await fetch(path,{cache:'no-store'});
+      bits.push(lbl+': reachable (status '+t.status+')');}
+    catch(err){bits.push(lbl+': not reachable');}
+  }
+  out.innerHTML='<br>· '+bits.join('<br>· ');
+};
 document.getElementById('go').onclick=open_;
 document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')open_();});
 </script></body></html>
